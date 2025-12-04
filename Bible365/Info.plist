@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+    <dict>
+        
+        <key>GADApplicationIdentifier</key>
+        <string>ca-app-pub-3940256099942544~1458002511</string>
+        
+        <key>NSAppTransportSecurity</key>
+        <dict>
+            <key>NSAllowsArbitraryLoads</key>
+            <true/>
+        </dict>
+
+<!--        <key>NSMicrophoneUsageDescription</key>-->
+<!--        <string>음성 인식을 위해 마이크 접근 권한이 필요합니다.</string>-->
+
+        <key>NSSpeechRecognitionUsageDescription</key>
+        <string>읽는 성경 구절을 인식해서 하이라이트하기 위해 음성 인식을 사용합니다.</string>
+        <key>NSMicrophoneUsageDescription</key>
+        <string>성경 구절을 읽는 음성을 녹음하기 위해 마이크를 사용합니다.</string>
+
+        
+        
+        
+    </dict>
+    
+
+</plist>
