@@ -8,55 +8,42 @@
 import Foundation
 import SwiftUI
 
+// MARK: - 1) 메인 팀 챌린지 화면
+
 struct TeamChallengeMainView: View {
 
     @StateObject private var store = TeamChallengeStore.shared
-    // 🔹 책별 진행률 계산용
-    @StateObject private var progressVM = PersonalChallengeViewModel()
-
     @State private var showCreateTeamSheet = false
 
     var body: some View {
         NavigationStack {
             List {
-                // ✅ 1) 내 팀 목록 (지금은 activeTeam 1개지만 나중에 확장 가능)
+                // ✅ 1) 내가 참여 중인 모든 팀
                 Section(header: Text("내가 참여 중인 팀")) {
-                    if let team = store.activeTeam {
-                        NavigationLink {
-                            // 🔹 진행률 VM 함께 전달
-                            TeamDetailView(team: team, progressVM: progressVM)
-                        } label: {
-                            TeamRow(team: team)
-                        }
+                    if store.myTeams.isEmpty {
+                        noTeamSection
                     } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("참여 중인 팀이 없습니다.")
-                                .foregroundColor(.secondary)
-
-                            Button {
-                                showCreateTeamSheet = true
-                            } label: {
-                                HStack {
-                                    Image(systemName: "plus.circle.fill")
-                                    Text("새 팀 만들기")
-                                }
+                        ForEach(store.myTeams) { team in
+                            NavigationLink(
+                                destination: TeamDetailView(team: team)
+                            ) {
+                                TeamRow(team: team)
                             }
                         }
                     }
                 }
 
-                // ✅ 2) 완료된 팀 랭킹 / 히스토리로 가는 네비
+                // ✅ 2) 완료된 팀 랭킹
                 Section {
-                    NavigationLink {
-                        TeamRankingBoardView()
-                    } label: {
+                    NavigationLink(
+                        destination: TeamRankingBoardView()
+                    ) {
                         Text("완료된 팀 랭킹 보드")
                     }
                 }
             }
             .navigationTitle("팀 챌린지")
             .toolbar {
-                // 우측 상단 + 버튼 → 팀 추가
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         showCreateTeamSheet = true
@@ -66,19 +53,42 @@ struct TeamChallengeMainView: View {
                 }
             }
         }
-        .task {
-            await store.loadActiveTeam()
+        // 🔹 화면 진입 시 내 팀 목록 로딩
+        .onAppear {
+            Task {
+                await store.reloadMyTeams()
+            }
         }
+        // 🔹 새 팀 생성 후 다시 로딩
         .sheet(isPresented: $showCreateTeamSheet) {
-            TeamCreateView(onCreated: {
-                // 팀 생성 후 목록 갱신
-                Task { await store.loadActiveTeam() }
-            })
+            TeamCreateView { _ in
+                Task {
+                    await store.reloadMyTeams()
+                }
+            }
+        }
+    }
+
+    // 그대로 사용하던 noTeamSection
+    private var noTeamSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("참여 중인 팀이 없습니다.")
+                .foregroundColor(.secondary)
+
+            Button {
+                showCreateTeamSheet = true
+            } label: {
+                HStack {
+                    Image(systemName: "plus.circle.fill")
+                    Text("새 팀 만들기")
+                }
+            }
         }
     }
 }
 
-// MARK: - 팀 목록 셀
+
+// MARK: - 2) 팀 리스트 Row
 
 struct TeamRow: View {
     let team: TeamChallengeTeam
@@ -105,38 +115,101 @@ struct TeamRow: View {
     }
 }
 
-// MARK: - 팀 상세 화면
+
+// MARK: - 3) 팀 상세 화면
 
 struct TeamDetailView: View {
 
     let team: TeamChallengeTeam
-    @ObservedObject var progressVM: PersonalChallengeViewModel
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+       @StateObject private var boardVM = TeamBoardViewModel()
 
-                teamHeader
+       var body: some View {
+           ScrollView {
+               VStack(alignment: .leading, spacing: 20) {
 
-                membersSection
+                   teamHeader
+                   membersSection
+                   myAssignmentsSection
 
-                myAssignmentsSection
+                   // 🔹 여기: 팀 보드 섹션 추가
+                   teamBoardSection
 
-                Spacer(minLength: 20)
+                   Spacer(minLength: 20)
+               }
+               .padding(.top, 16)
+           }
+           .navigationTitle(team.name)
+           .navigationBarTitleDisplayMode(.inline)
+           .task {
+               await boardVM.loadBoard(teamId: team.id)
+           }
+       }
+
+       private var teamBoardSection: some View {
+           VStack(alignment: .leading, spacing: 8) {
+               Text("이 팀 진행 보드")
+                   .font(.headline)
+                   .padding(.horizontal, 20)
+
+               if boardVM.isLoading {
+                   ProgressView()
+                       .padding(.horizontal, 20)
+               } else if let error = boardVM.errorMessage {
+                   Text(error)
+                       .font(.caption)
+                       .foregroundColor(.red)
+                       .padding(.horizontal, 20)
+               } else {
+                   // 내 순위/진행
+                   if let me = boardVM.myEntry {
+                       HStack {
+                           Text("내 진행도: \(Int(me.progress * 100))% / \(me.completionCount)독")
+                               .font(.subheadline)
+                           Spacer()
+                       }
+                       .padding(.horizontal, 20)
+                   }
+
+                   // 팀원별 랭킹 리스트
+                   ForEach(boardVM.ranking, id: \.userId) { entry in
+                       HStack {
+                           Text(entry.nickname)
+                           Spacer()
+                           Text("\(Int(entry.progress * 100))%")
+                           Text("\(entry.completionCount)독")
+                               .foregroundColor(.secondary)
+                       }
+                       .font(.caption)
+                       .padding(.horizontal, 20)
+                       .padding(.vertical, 4)
+                   }
+               }
+           }
+       }
+
+    // MARK: - 팀 헤더
+    // TeamDetailView 안에 추가 예시 (단순 표시용)
+
+    private var myTeamBoardPreview: some View {
+        let mode: BibleProgressMode = .team(teamId: team.id, name: team.name)
+        let global = ReadingProgressStore.shared.globalProgress(mode: mode)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("이 팀에서의 나의 진행률")
+                .font(.headline)
+
+            HStack {
+                ProgressView(value: global)
+                    .frame(maxWidth: .infinity)
+                Text("\(Int(global * 100))%")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            .padding(.top, 16)
         }
-        .navigationTitle("팀 챌린지")
-        .navigationBarTitleDisplayMode(.inline)
-        // ⬇️⬇️ 팀이 완료 상태라면 로컬 진행률 리셋
-                .onAppear {
-                    if team.status == "COMPLETED" {
-                        progressVM.forceResetAllProgressForNewRoundFromTeam()
-                    }
-                }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
     }
-
-    // MARK: - 팀 정보 카드
 
     private var teamHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -182,6 +255,7 @@ struct TeamDetailView: View {
             ForEach(team.members) { member in
                 HStack {
                     Text(member.nickname)
+
                     if member.isLeader {
                         Text("리더")
                             .font(.caption2)
@@ -190,6 +264,7 @@ struct TeamDetailView: View {
                             .background(Color.yellow.opacity(0.3))
                             .cornerRadius(6)
                     }
+
                     Spacer()
                 }
                 .padding(.horizontal, 20)
@@ -198,9 +273,10 @@ struct TeamDetailView: View {
         }
     }
 
-    // MARK: - 내가 맡은 성경책 섹션 (책 선택 → 말씀 읽기 + 진행률)
+    // MARK: - 내가 맡은 성경책 → 읽기 플로우
 
     private var myAssignmentsSection: some View {
+
         let myUserId = Int(AuthAPI.shared.currentLoginUserId ?? "") ?? -1
         let myAssignments = team.assignments(forUserId: myUserId)
         let myBooks = myAssignments.compactMap { $0.book }
@@ -211,23 +287,25 @@ struct TeamDetailView: View {
                 .padding(.horizontal, 20)
 
             if myBooks.isEmpty {
+
                 Text("아직 배정된 성경책이 없습니다.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 20)
+
             } else {
+
                 ForEach(myBooks, id: \.id) { book in
-                    // 🔹 이 책에 대한 개인 진행률 (0.0 ~ 1.0)
-                    let progress = progressVM.progressForBook(book.code)
-                    let percent = Int(progress * 100)
 
                     NavigationLink {
-                        // 팀 모드 + 선택한 책으로 읽기 플로우 진입
+                        // 🔥 팀마다 완전히 다른 진행도/보드가 되도록 teamId까지 넣어줌
                         PersonalChallengeReadingView(
-                            mode: .team(name: team.name),
-                            preselectedBook: book
+                            mode: .team(teamId: team.id, name: team.name),
+                            preselectedBook: book,
+                            initialVerseId: nil
                         )
-                    } label: {
+                    }
+                        label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 Text(book.nameKo)
@@ -237,13 +315,9 @@ struct TeamDetailView: View {
                                     .foregroundColor(.secondary)
                             }
 
-                            HStack(spacing: 8) {
-                                ProgressView(value: progress)
-                                    .frame(maxWidth: .infinity)
-                                Text("\(percent)%")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
+                            Text("팀 진행률은 곧 제공될 예정입니다.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                         }
                         .padding(.horizontal, 20)
                         .padding(.vertical, 6)
@@ -253,3 +327,4 @@ struct TeamDetailView: View {
         }
     }
 }
+

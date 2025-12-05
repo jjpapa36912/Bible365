@@ -19,8 +19,16 @@ struct RootView: View {
                     // 🔹 로그인 화면
                     LoginView(
                         onLoginSuccess: {
-                            self.isLoggedIn = true
-                        },
+                                // ✅ 1) (LoginView 내부에서) userId, nickname을 UserDefaults에 먼저 저장했다고 가정
+                                // UserDefaults.standard.set(userId, forKey: "userId")
+                                // UserDefaults.standard.set(nickname, forKey: "nickname")
+
+                                // ✅ 2) 현재 userId 기준으로 ReadingProgressStore를 다시 로드
+                                ReadingProgressStore.shared.reloadForCurrentUser()
+
+                                // ✅ 3) 메인 화면으로 전환
+                                self.isLoggedIn = true
+                            },
                         onSignupTapped: {
                             showSignup = true
                         },

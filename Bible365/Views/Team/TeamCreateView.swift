@@ -18,7 +18,8 @@ struct TeamCreateView: View {
     @State private var searchText: String = ""
     @State private var selectedIds: Set<Int> = []
 
-    let onCreated: () -> Void
+    // 🔥 팀 생성 후 상위로 "팀 이름"만 전달
+    let onCreated: (TeamChallengeTeam) -> Void
 
     var body: some View {
         NavigationStack {
@@ -140,16 +141,22 @@ struct TeamCreateView: View {
 
         let ok = await store.createTeam(
             teamName: teamName,
-            memberIds: memberIds   // ⬅️ 여기 중요!
+            memberIds: memberIds
         )
 
         if ok {
-            onCreated()
+            // 🔹 스토어가 방금 생성된 팀을 activeTeam 에 넣어둠
+            if let newTeam = store.activeTeam {
+                onCreated(newTeam)   // ⬅️ 이제 (TeamChallengeTeam) 전달
+            } else {
+                // 혹시 모를 방어 로직 (서버 오류 등)
+                print("⚠️ createTeam: ok인데 activeTeam 이 nil 입니다.")
+            }
             dismiss()
         }
     }
-}
 
+}
 // MARK: - 아래 TeamCreateViewModel / FriendRow 는 현재 사용 안 하는 옛 설계라서
 // 필요 없으면 과감히 지워도 됨. 남겨두고 싶으면 주석 처리만 해놔도 OK.
 

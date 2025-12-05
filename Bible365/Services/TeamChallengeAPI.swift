@@ -107,6 +107,31 @@ final class TeamChallengeAPI {
 
     // MARK: - 공통 요청 빌더
     // 👉 authHeader는 기본 false (팀 챌린지 API는 토큰 안 붙임)
+    // MARK: - 6) 내가 속한 팀 전체 조회
+    // GET /api/team/my-teams?userId=...
+
+    // MARK: - 6) 내가 속한 팀 전체 조회
+    // GET /api/team/my-teams?userId=...
+
+    func fetchMyTeams() async throws -> [TeamResponseDTO] {
+        guard let loginUserId = currentLoginUserId(), !loginUserId.isEmpty else {
+            throw TeamChallengeAPIError.notAuthenticated
+        }
+
+        let encodedUserId = loginUserId.addingPercentEncoding(
+            withAllowedCharacters: .urlQueryAllowed
+        ) ?? loginUserId
+
+        let request = try makeRequest(
+            path: "/api/team/my-teams?userId=\(encodedUserId)",
+            method: "GET",
+            body: nil as EmptyBody?,
+            authHeader: false
+        )
+
+        return try await sendRequest(request, as: [TeamResponseDTO].self)
+    }
+
 
     private func makeRequest(
         path: String,

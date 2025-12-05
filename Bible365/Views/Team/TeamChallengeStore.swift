@@ -12,6 +12,13 @@ final class TeamChallengeStore: ObservableObject {
     static let shared = TeamChallengeStore()
     private init() {}
 
+    // ✅ 내가 속한 모든 팀 목록
+    @Published var myTeams: [TeamChallengeTeam] = []
+
+    // ✅ 현재 화면에서 주로 보는 팀 (선택된/대표 ACTIVE 팀)
+    @Published var activeTeam: TeamChallengeTeam?
+
+    // 최근 완료된 팀 (예: 히스토리 화면에서 강조용)
     @Published var recentlyCompletedTeam: TeamHistoryItem?
 
     // 친구 리스트 (서버에서 내려온 후보)
@@ -19,9 +26,6 @@ final class TeamChallengeStore: ObservableObject {
 
     // 팀 생성 시 선택한 친구 ID (뷰에서 직접 쓰지 않아도 됨)
     @Published var selectedFriendIds: Set<Int> = []
-
-    // 현재 내가 참여 중인 팀 (ACTIVE 팀)
-    @Published var activeTeam: TeamChallengeTeam?
 
     // 완료된 팀 히스토리
     @Published var history: [TeamHistoryItem] = []
@@ -50,7 +54,7 @@ final class TeamChallengeStore: ObservableObject {
         }
     }
 
-    // 친구 선택 / 해제 (다른 화면에서 쓸 수 있도록 남겨둠)
+    // 친구 선택 / 해제
     func toggleFriend(id: Int) {
         if selectedFriendIds.contains(id) {
             selectedFriendIds.remove(id)
@@ -59,8 +63,9 @@ final class TeamChallengeStore: ObservableObject {
         }
     }
 
-    // MARK: - 2) 내 ACTIVE 팀 불러오기
+    // MARK: - 2) 내 ACTIVE 팀 불러오기 (기존 단일 팀)
 
+    /// 서버에 "현재 ACTIVE 팀 1개"를 따로 주는 API가 있을 경우 사용
     func loadActiveTeam() async {
         do {
             isLoading = true
@@ -68,7 +73,11 @@ final class TeamChallengeStore: ObservableObject {
 
             let dto = try await TeamChallengeAPI.shared.fetchActiveTeam()
             if let dto {
-                self.activeTeam = dto.toModel()
+                let model = dto.toModel()
+                self.activeTeam = model
+
+                // myTeams에도 동기화
+                upsertTeam(model)
             } else {
                 self.activeTeam = nil
             }
@@ -77,6 +86,53 @@ final class TeamChallengeStore: ObservableObject {
             self.errorMessage = "팀 정보를 불러오지 못했어요.\n\(error.localizedDescription)"
         }
     }
+    // 🔥 새로 추가 / 정리: 내 팀 전체 로딩
+        func reloadMyTeams() async {
+            do {
+                isLoading = true
+                defer { isLoading = false }
+
+                // 서버에서 내가 속한 팀 전체 조회
+                let list = try await TeamChallengeAPI.shared.fetchMyTeams()
+
+                let models = list.map { $0.toModel() }
+                self.myTeams = models
+
+                // ACTIVE 팀이 있으면 우선 선택, 없으면 첫 번째 팀
+                if let active = models.first(where: { $0.status == "ACTIVE" }) {
+                    self.activeTeam = active
+                } else {
+                    self.activeTeam = models.first
+                }
+            } catch {
+                print("❌ reloadMyTeams error:", error)
+                self.errorMessage = "내 팀 목록을 불러오지 못했어요.\n\(error.localizedDescription)"
+            }
+        }
+    // MARK: - 2-1) 내가 속한 모든 팀 불러오기 (여러 팀 지원 핵심)
+
+//    func loadMyTeams() async {
+//        do {
+//            isLoading = true
+//            defer { isLoading = false }
+//
+//            // 🔹 서버에서 "내가 속한 팀 전체"를 내려주는 API라고 가정
+//            let list = try await TeamChallengeAPI.shared.fetchMyTeams()
+//
+//            let models = list.map { $0.toModel() }
+//            self.myTeams = models
+//
+//            // ACTIVE 팀이 있다면 activeTeam으로 선정, 없으면 첫 번째 팀
+//            if let active = models.first(where: { $0.status == "ACTIVE" }) {
+//                self.activeTeam = active
+//            } else {
+//                self.activeTeam = models.first
+//            }
+//        } catch {
+//            print("❌ loadMyTeams error:", error)
+//            self.errorMessage = "내 팀 목록을 불러오지 못했어요.\n\(error.localizedDescription)"
+//        }
+//    }
 
     // MARK: - 3) 팀 생성
 
@@ -97,7 +153,14 @@ final class TeamChallengeStore: ObservableObject {
                 memberIds: memberIds
             )
 
-            self.activeTeam = dto.toModel()
+            let model = dto.toModel()
+
+            // ✅ 새로 만든 팀을 myTeams에 추가
+            upsertTeam(model)
+
+            // ✅ 방금 만든 팀을 activeTeam으로 설정
+            self.activeTeam = model
+
             return true
         } catch {
             print("❌ createTeam error:", error)
@@ -109,19 +172,27 @@ final class TeamChallengeStore: ObservableObject {
     // MARK: - 4) 책 완독 이벤트 (= markBookFinished 서버 호출)
 
     /// 팀 내에서 어떤 책이 1독 완료되었을 때 호출
-    func markBookFinished(bookIndex: Int) async {
-        guard let team = activeTeam else { return }
-
+    /// - 여러 팀 지원을 위해 teamId를 명시적으로 받도록 변경
+    func markBookFinished(teamId: Int, bookIndex: Int) async {
         do {
             isLoading = true
             defer { isLoading = false }
 
             let dto = try await TeamChallengeAPI.shared.markBookFinished(
-                teamId: team.id,
+                teamId: teamId,
                 bookIndex: bookIndex
             )
 
-            self.activeTeam = dto.toModel()
+            let updatedTeam = dto.toModel()
+
+            // ✅ myTeams 안에서 해당 팀 갱신
+            upsertTeam(updatedTeam)
+
+            // ✅ activeTeam이 이 팀이면 같이 갱신
+            if activeTeam?.id == updatedTeam.id {
+                activeTeam = updatedTeam
+            }
+
         } catch {
             print("❌ markBookFinished error:", error)
             self.errorMessage = "완독 처리에 실패했어요.\n\(error.localizedDescription)"
@@ -140,6 +211,17 @@ final class TeamChallengeStore: ObservableObject {
         } catch {
             print("❌ loadHistory error:", error)
             self.errorMessage = "히스토리를 불러오지 못했어요.\n\(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - 내부 헬퍼: 팀 upsert
+
+    /// myTeams에 같은 id의 팀이 있으면 교체, 없으면 append
+    private func upsertTeam(_ team: TeamChallengeTeam) {
+        if let idx = myTeams.firstIndex(where: { $0.id == team.id }) {
+            myTeams[idx] = team
+        } else {
+            myTeams.append(team)
         }
     }
 }

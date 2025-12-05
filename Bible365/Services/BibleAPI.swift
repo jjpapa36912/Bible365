@@ -161,3 +161,250 @@ final class BibleAPI {
 
 
 }
+// BibleAPI.swift
+
+extension BibleAPI {
+    func addAuthHeader(_ request: inout URLRequest) {
+            guard var token = UserDefaults.standard.string(forKey: "jwtToken") else {
+                print("⚠️ addAuthHeader: jwtToken 없음")
+                return
+            }
+
+            // 이미 "Bearer "로 시작하면 그대로 사용
+            if !token.lowercased().hasPrefix("bearer ") {
+                token = "Bearer \(token)"
+            }
+
+            print("🔐 Authorization 헤더 세팅: \(token)") // 디버깅용
+            request.addValue(token, forHTTPHeaderField: "Authorization")
+        }
+
+    struct LastReadPositionRequestDTO: Codable {
+        let verseId: String
+        let mode: String
+        let teamId: Int?
+        let teamName: String?
+    }
+
+    struct LastReadPositionResponseDTO: Codable {
+        let verseId: String
+        let mode: String
+        let teamId: Int?
+        let teamName: String?
+    }
+
+
+    /// 저장된 이어읽기 위치 조회 (없으면 nil)
+    // 이어읽기 위치 조회
+        func fetchLastReadPosition() async throws -> LastReadPositionResponseDTO? {
+           let url = baseURL.appendingPathComponent("/api/reading/last-read")
+           var request = URLRequest(url: url)
+           request.httpMethod = "GET"
+           request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+           addAuthHeader(&request)   // 🔹 기존 JWT 붙이는 함수
+
+           let (data, response) = try await URLSession.shared.data(for: request)
+
+           guard let http = response as? HTTPURLResponse else {
+               throw APIError.network
+           }
+
+           // 🔹 401: 토큰 만료 or 로그인 필요
+           if http.statusCode == 401 {
+               print("❌ fetchLastReadPosition: 401 Unauthorized (토큰 만료/로그인 필요)")
+               throw APIError.unauthorized
+           }
+
+           // 🔹 404: 아직 이어읽기 기록 없음 → nil 리턴
+           if http.statusCode == 404 {
+               print("ℹ️ fetchLastReadPosition: 404 (이어읽기 기록 없음)")
+               return nil
+           }
+
+           // 🔹 그밖의 에러
+           guard (200...299).contains(http.statusCode) else {
+               print("❌ fetchLastReadPosition 실패: httpStatus(code: \(http.statusCode))")
+               throw APIError.httpStatus(code: http.statusCode)
+           }
+
+           do {
+               return try JSONDecoder().decode(LastReadPositionResponseDTO.self, from: data)
+           } catch {
+               print("❌ fetchLastReadPosition 디코딩 실패: \(error)")
+               throw APIError.decoding
+           }
+       }
+
+    /// 이어읽기 위치 갱신
+    func updateLastReadPosition(verseId: String,
+                                mode: String,
+                                teamId: Int?,
+                                teamName: String?) async throws
+ {
+           let url = baseURL.appendingPathComponent("/api/reading/last-read")
+           var request = URLRequest(url: url)
+           request.httpMethod = "POST"
+           request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+
+           addAuthHeader(&request)   // 🔹 JWT
+
+     let body = LastReadPositionRequestDTO(
+         verseId: verseId,
+         mode: mode,
+         teamId: teamId,
+         teamName: teamName
+     )
+        request.httpBody = try JSONEncoder().encode(body)
+
+           let (_, response) = try await URLSession.shared.data(for: request)
+
+           guard let http = response as? HTTPURLResponse else {
+               throw APIError.network
+           }
+
+           // 🔹 401: 토큰 만료 or 로그인 필요
+           if http.statusCode == 401 {
+               print("❌ updateLastReadPosition: 401 Unauthorized (토큰 만료/로그인 필요)")
+               throw APIError.unauthorized
+           }
+
+           guard (200...299).contains(http.statusCode) else {
+               print("❌ updateLastReadPosition 실패: httpStatus(code: \(http.statusCode))")
+               throw APIError.httpStatus(code: http.statusCode)
+           }
+       }
+}
+enum APIError: Error {
+    case network
+    case unauthorized          // 🔹 401 전용
+    case httpStatus(code: Int)
+    case decoding
+}
+extension BibleAPI {
+
+    struct TeamProgressUpdateRequestDTO: Codable {
+        let completionCount: Int
+        let progress: Double
+    }
+
+    struct TeamProgressEntryDTO: Codable {
+        let userId: Int
+        let nickname: String
+        let completionCount: Int
+        let progress: Double
+    }
+
+    // 🔹 팀 진행도 갱신
+    func updateTeamProgress(teamId: Int,
+                            completionCount: Int,
+                            progress: Double) async throws {
+        let url = baseURL.appendingPathComponent("/api/team/\(teamId)/progress")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        addAuthHeader(&request)
+
+        let body = TeamProgressUpdateRequestDTO(
+            completionCount: completionCount,
+            progress: progress
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.network
+        }
+
+        if http.statusCode == 401 {
+            throw APIError.unauthorized
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw APIError.httpStatus(code: http.statusCode)
+        }
+    }
+
+    // 🔹 팀 랭킹 보드 조회
+    func fetchTeamRanking(teamId: Int) async throws -> [TeamProgressEntryDTO] {
+        let url = baseURL.appendingPathComponent("/api/team/\(teamId)/progress/ranking")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        addAuthHeader(&request)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.network
+        }
+
+        if http.statusCode == 401 {
+            throw APIError.unauthorized
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw APIError.httpStatus(code: http.statusCode)
+        }
+
+        return try JSONDecoder().decode([TeamProgressEntryDTO].self, from: data)
+    }
+
+    // 🔹 내가 이 팀에서 어느 정도인지 조회
+    func fetchMyTeamProgress(teamId: Int) async throws -> TeamProgressEntryDTO? {
+        let url = baseURL.appendingPathComponent("/api/team/\(teamId)/progress/me")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        addAuthHeader(&request)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.network
+        }
+
+        if http.statusCode == 401 {
+            throw APIError.unauthorized
+        }
+        if http.statusCode == 404 {
+            return nil
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw APIError.httpStatus(code: http.statusCode)
+        }
+
+        return try JSONDecoder().decode(TeamProgressEntryDTO.self, from: data)
+    }
+}
+extension BibleAPI {
+    struct PersonalProgressRequest: Encodable {
+        let completionCount: Int
+        let progress: Double
+    }
+
+    @MainActor
+    func updatePersonalProgress(completionCount: Int, progress: Double) async throws {
+        let url = baseURL.appendingPathComponent("/api/bible/personal/progress")
+
+        let body = PersonalProgressRequest(
+            completionCount: completionCount,
+            progress: progress
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              200..<300 ~= httpResponse.statusCode else {
+            throw URLError(.badServerResponse)
+        }
+
+        print("📡 personal progress updated OK")
+    }
+}
+

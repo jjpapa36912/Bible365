@@ -41,8 +41,9 @@ struct BibleHomeView: View {
     }
 
     /// 성경 66권 전체 기준 진행률
+    /// 성경 66권 전체 기준 진행률
     private var globalProgressSection: some View {
-        let globalRatio = progressStore.globalProgress()
+        let globalRatio = progressStore.globalProgress(mode: .personal)
         let globalPercent = Int(globalRatio * 100)
 
         return VStack(alignment: .leading, spacing: 8) {
@@ -58,12 +59,9 @@ struct BibleHomeView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    /// “현재 집중 책” 진행률 (예: 잠언)
-    /// 여기서는 예시로 잠언(PRO)을 고정으로 보여줌.
-    /// 나중에 유저가 선택한 책을 저장해두고 그걸 보여줘도 됨.
+    /// “현재 집중 책” 진행률
     private var currentBookProgressSection: some View {
-        let proRatio = progressStore.progressForBook(bookCode: "PRO")
+        let proRatio = progressStore.progressForBook(bookCode: "PRO", mode: .personal)
         let proPercent = Int(proRatio * 100)
 
         return VStack(alignment: .leading, spacing: 8) {
@@ -85,6 +83,7 @@ struct BibleHomeView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
 
     private var startChallengeButton: some View {
         Text("개인 챌린지 시작하기")

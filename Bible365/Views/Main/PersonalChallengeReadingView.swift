@@ -3,10 +3,33 @@ import Speech
 
 // MARK: - 개인 / 팀 모드
 
-enum BibleProgressMode {
+// MARK: - 개인 / 팀 모드
+
+enum BibleProgressMode: Equatable {
     case personal
-    case team(name: String)
+    case team(teamId: Int, name: String)
+
+    var isPersonal: Bool {
+        if case .personal = self { return true }
+        return false
+    }
+
+    var teamId: Int? {
+        if case let .team(id, _) = self { return id }
+        return nil
+    }
+
+    var displayName: String {
+        switch self {
+        case .personal:
+            return "개인"
+        case .team(_, let name):
+            return name
+        }
+    }
 }
+
+
 
 // MARK: - 66권 정보
 
@@ -328,35 +351,51 @@ struct BibleProgressBoardView: View {
 // MARK: - 메인 개인 챌린지 뷰
 
 struct PersonalChallengeReadingView: View {
-    let mode: BibleProgressMode   // ✅ 추가
-    @State private var showFinishAlert = false
+    // MARK: - 입력 파라미터
+    let mode: BibleProgressMode
+       let preselectedBook: BibleBook?
+       let initialVerseId: String?
 
-    @StateObject private var speech = SpeechRecognizer()
-    @StateObject private var vm = PersonalChallengeViewModel()
-    @State private var step: PersonalChallengeStep = .selectCategory
+    @StateObject private var vm: PersonalChallengeViewModel
+       @StateObject private var speech = SpeechRecognizer()
 
-    @State private var showBibleBoard: Bool = false
-        let preselectedBook: BibleBook?   // 🔹 새로 추가
+       @State private var step: PersonalChallengeStep = .selectCategory
+       @State private var showFinishAlert = false
+       @State private var showBibleBoard = false
 
-        init(mode: BibleProgressMode = .personal,
-             preselectedBook: BibleBook? = nil) {
-            self.mode = mode
-            self.preselectedBook = preselectedBook
-        }
+    init(
+           mode: BibleProgressMode = .personal,
+           preselectedBook: BibleBook? = nil,
+           initialVerseId: String? = nil
+       ) {
+           _vm = StateObject(
+               wrappedValue: PersonalChallengeViewModel(mode: mode)
+           )
+           self.mode = mode
+           self.preselectedBook = preselectedBook
+           self.initialVerseId = initialVerseId
+
+           _vm = StateObject(wrappedValue: PersonalChallengeViewModel(mode: mode))
+       }
+
+
+
     var body: some View {
-        NavigationStack {
-            Group {
-                switch step {
-                case .selectCategory:
-                    categorySelectView
-                case .selectVerse:
-                    verseSelectView
-                case .reading:
-                    readingView
+            NavigationStack {
+                Group {
+                    switch step {
+                    case .selectCategory:
+                        categorySelectView
+                    case .selectVerse:
+                        verseSelectView
+                    case .reading:
+                        readingView
+                    }
                 }
+                .navigationBarHidden(true)
             }
-            .navigationBarHidden(true)
-        }
+            .task { await initializeFlow() }
+        
 //        Button("테스트: 마가복음 1:1만 남기기") {
 //            vm.debugMarkAllAsReadExceptMark11()
 //        }
@@ -392,10 +431,48 @@ struct PersonalChallengeReadingView: View {
         } message: {
             Text("축하합니다! 성경 1회독을 완료했어요.")
         }
+            
+        .task {
+                // 1) 이어읽기로 들어온 경우가 최우선
+                if let verseId = initialVerseId {
+                    await vm.jumpToVerse(verseId: verseId)
+                    await MainActor.run {
+                        step = .reading
+                    }
+                    return
+                }
+
+                // 2) 팀 챌린지에서 "내가 맡은 책"으로 들어온 경우
+                if let preBook = preselectedBook {
+                    await vm.loadBooksIfNeeded()
+                    await MainActor.run {
+                        vm.selectedBookCode = preBook.code
+                        vm.updateVerse(bookCode: preBook.code, chapter: 1, verse: 1)
+                        step = .reading
+                    }
+                }
+            }
 
 
     }
+    private func initializeFlow() async {
 
+            // 1) 이어읽기
+            if let vId = initialVerseId {
+                await vm.jumpToVerse(verseId: vId)
+                step = .reading
+                return
+            }
+
+            // 2) 팀 챌린지에서 특정 책으로 들어온 경우
+            if let book = preselectedBook {
+                await vm.loadBooksIfNeeded()
+                vm.selectedBookCode = book.code
+                vm.updateVerse(bookCode: book.code, chapter: 1, verse: 1)
+                step = .reading
+                return
+            }
+        }
     // 현재 책 코드 (보드 하이라이트용)
     private var currentBookCodeForBoard: String? {
         let currentName = vm.currentVerse.book
@@ -522,11 +599,81 @@ struct PersonalChallengeReadingView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .onAppear {
             speech.requestAuthorization()
+            // 🔹 읽기 화면 들어온 시점의 절을 이어읽기로 저장
+            sendLastReadPosition()
         }
-       
+        .onChange(of: vm.currentVerse.id) { _ in
+            // 🔹 절 이동(이전/다음, 책 변경)할 때마다 저장
+            sendLastReadPosition()
+        }
     }
 
+
     // MARK: - 헤더
+    private func sendLastReadPosition() {
+        let verseId = vm.currentVerse.id
+
+        Task {
+            do {
+                switch mode {
+                case .personal:
+                    try await BibleAPI.shared.updateLastReadPosition(
+                        verseId: verseId,
+                        mode: "personal",
+                        teamId: nil,
+                        teamName: nil
+                    )
+
+                case .team(let id, let name):
+                    try await BibleAPI.shared.updateLastReadPosition(
+                        verseId: verseId,
+                        mode: "team",
+                        teamId: id,
+                        teamName: name
+                    )
+                }
+
+                print("✅ updateLastReadPosition 성공")
+
+            } catch APIError.unauthorized {
+                print("❌ lastReadPosition: 401 (로그인 필요)")
+            } catch {
+                print("❌ updateLastReadPosition 오류: \(error)")
+            }
+        }
+    }
+
+
+
+    // MARK: - 헤더
+    private func modeString() -> String {
+        switch mode {
+        case .personal:
+            return "personal"
+        case .team:
+            return "team"
+        }
+    }
+
+    private var headerTitle: String {
+        switch mode {
+        case .personal:
+            return "개인 챌린지"
+        case .team(let name):
+            return "팀 챌린지 (\(name))"
+        }
+    }
+
+
+    private var headerSubtitle: String? {
+        if case let .team(_, name) = mode {
+            return name
+        }
+        return nil
+    }
+
+
+
 
     private var header: some View {
         ZStack {
@@ -544,9 +691,18 @@ struct PersonalChallengeReadingView: View {
 
                     Spacer()
 
-                    Text("챌린지")
-                        .foregroundColor(.white)
-                        .font(.headline)
+                    VStack(spacing: 2) {
+                        Text(headerTitle)
+                            .foregroundColor(.white)
+                            .font(.headline)
+
+
+                        if let subtitle = headerSubtitle {
+                            Text(subtitle)
+                                .foregroundColor(.white.opacity(0.8))
+                                .font(.caption)
+                        }
+                    }
 
                     Spacer()
 

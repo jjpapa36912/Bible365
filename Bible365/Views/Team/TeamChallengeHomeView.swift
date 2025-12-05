@@ -17,7 +17,7 @@ struct TeamChallengeHomeView: View {
             if let activeTeam = store.activeTeam {
                 ActiveTeamDashboardView(team: activeTeam)
             } else {
-                TeamCreateView {
+                TeamCreateView {_ in 
                     // 필요하면 만든 직후 리로드
                     Task { await store.loadActiveTeam() }
                 }

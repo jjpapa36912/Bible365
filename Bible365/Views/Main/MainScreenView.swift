@@ -11,14 +11,20 @@ import SwiftUI
 struct MainScreenView: View {
     var onLogout: (() -> Void)? = nil   // RootView 에서 주는 콜백
 
+    // 🔹 이어읽기용 상태
+    @State private var lastRead: BibleAPI.LastReadPositionResponseDTO?
+    @State private var showContinueReading = false
+
     // 🔹 진행도 스토어 (개인 챌린지 기반)
     @ObservedObject private var progressStore = ReadingProgressStore.shared
+
     private var currentNickname: String {
         UserDefaults.standard.string(forKey: "nickname") ?? ""
     }
 
     // 🔹 서버 랭킹용
     @StateObject private var rankingVM = RankingViewModel()
+
     // 🔹 내 랭킹 엔트리 (서버 기준)
     private var myRankingEntry: RankingEntry? {
         guard let myId = rankingVM.currentUserId else { return nil }
@@ -26,41 +32,32 @@ struct MainScreenView: View {
     }
 
     // 🔹 완독/진행률: 우선 서버 값, 없으면 로컬 값
+    // 🔵 완독/진행률: 우선 서버 값, 없으면 로컬 값
     private var myCompletionCount: Int {
         if let entry = myRankingEntry {
             return entry.completionCount
         }
-        return progressStore.globalCompletionCount()
+        // ⬇️ 여기 수정
+        return progressStore.globalCompletionCount(mode: .personal)
     }
 
     private var myProgress: Double {
         if let entry = myRankingEntry {
-            return entry.progress   // 0.0 ~ 1.0 이라고 가정
+            return entry.progress      // 0.0 ~ 1.0 이라고 가정
         }
-        return progressStore.globalProgress()
+        // ⬇️ 여기 수정
+        return progressStore.globalProgress(mode: .personal)
     }
+
 
     private var myReadPercent: Int {
         Int(myProgress * 100)
     }
-//    // 🔹 내 완독/진행률
-//    private var myCompletionCount: Int {
-//        progressStore.globalCompletionCount()
-//    }
-//
-//    private var myProgress: Double {
-//        progressStore.globalProgress()           // 0.0 ~ 1.0
-//    }
-//
-//    private var myReadPercent: Int {
-//        Int(myProgress * 100)
-//    }
 
     // 🔹 서버에서 내려온 엔트리를 그대로 사용
     private var rankingEntries: [RankingEntry] {
         rankingVM.entries
     }
-    
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -75,7 +72,8 @@ struct MainScreenView: View {
                     // 상단 카드 (헤더 높이만큼 여유를 둠)
                     BibleReadingCard(
                         completionCount: myCompletionCount,
-                        readPercent: myReadPercent
+                        readPercent: myReadPercent,
+                        onContinue: { handleContinueReading() }   // ✅ 이어읽기 액션 연결
                     )
                     .padding(.top, 140)
 
@@ -108,6 +106,7 @@ struct MainScreenView: View {
                             .foregroundColor(.primary)
 
                         NavigationLink {
+                            // 새로 시작하기는 그냥 기본 진입
                             PersonalChallengeReadingView(mode: .personal)
                         } label: {
                             ChallengeRowLabel(
@@ -119,14 +118,14 @@ struct MainScreenView: View {
                     }
 
                     // 토론 참여
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("토론에 참여하기")
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-
-                        // TODO: 토론방 / 커뮤니티 화면 연결
-                    }
+//                    VStack(alignment: .leading, spacing: 12) {
+//                        Text("토론에 참여하기")
+//                            .font(.title3)
+//                            .fontWeight(.semibold)
+//                            .foregroundColor(.primary)
+//
+//                        // TODO: 토론방 / 커뮤니티 화면 연결
+//                    }
 
                     Spacer(minLength: 24)
                 }
@@ -139,6 +138,54 @@ struct MainScreenView: View {
         // 🔹 화면 들어올 때 한 번 랭킹 불러오기
         .task {
             await rankingVM.load()
+        }
+        // 🔹 이어읽기 네비게이션
+        .navigationDestination(isPresented: $showContinueReading) {
+            if let info = lastRead {
+                if info.mode == "team", let teamId = info.teamId {
+                    PersonalChallengeReadingView(
+                        mode: .team(teamId: teamId, name: info.teamName ?? "팀 챌린지"),
+                        initialVerseId: info.verseId
+                    )
+                } else {
+                    PersonalChallengeReadingView(
+                        mode: .personal,
+                        initialVerseId: info.verseId
+                    )
+                }
+            } else {
+                PersonalChallengeReadingView(mode: .personal)
+            }
+        }
+
+
+
+    }
+
+    // MARK: - 이어읽기 처리 로직
+
+    private func handleContinueReading() {
+        Task {
+            do {
+                if let info = try await BibleAPI.shared.fetchLastReadPosition() {
+                    print("마지막 위치: \(info.verseId), mode=\(info.mode)")
+                    await MainActor.run {
+                        self.lastRead = info
+                        self.showContinueReading = true   // ✅ 화면 전환 트리거
+                    }
+                } else {
+                    print("이어 읽기 기록 없음 → 처음부터 시작")
+                    await MainActor.run {
+                        self.lastRead = nil
+                        self.showContinueReading = true
+                    }
+                }
+            } catch APIError.unauthorized {
+                print("❌ 이어읽기: 401 → 로그인 필요")
+                // TODO: 로그인 화면 이동 or 알림 처리
+            } catch {
+                print("❌ 이어읽기 오류: \(error)")
+            }
         }
     }
 
@@ -209,7 +256,8 @@ struct MainScreenView: View {
                         .padding(.vertical, 18)
                         .background(Color(UIColor.secondarySystemBackground))
                         .cornerRadius(24)
-                        .shadow(color: Color.black.opacity(0.03), radius: 10, x: 0, y: 4)
+                        .shadow(color: Color.black.opacity(0.03),
+                                radius: 10, x: 0, y: 4)
                     }
                     .buttonStyle(.plain)
                 }
@@ -268,7 +316,6 @@ struct MainScreenView: View {
         .frame(height: 220)
         .frame(maxWidth: .infinity, alignment: .top)
     }
-
 }
 
 // MARK: - 카드 뷰들
@@ -276,6 +323,12 @@ struct MainScreenView: View {
 struct BibleReadingCard: View {
     let completionCount: Int
     let readPercent: Int
+    @State private var showContinueSheet = false
+    @State private var continueVerseId: String? = nil
+    @State private var continueMode: BibleProgressMode = .personal
+    let onContinue: () -> Void   // 🔥 여기 추가!!
+
+
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -283,7 +336,7 @@ struct BibleReadingCard: View {
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.primary)
-
+            
             HStack {
                 VStack {
                     Text("\(completionCount)")
@@ -294,11 +347,11 @@ struct BibleReadingCard: View {
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-
+                
                 Rectangle()
                     .fill(Color.secondary.opacity(0.2))
                     .frame(width: 1, height: 40)
-
+                
                 VStack {
                     Text("\(readPercent)%")
                         .font(.system(size: 34, weight: .bold))
@@ -309,25 +362,39 @@ struct BibleReadingCard: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-
-            Button(action: {
-                // TODO: 계속 읽기 화면으로 이동
-            }) {
+            
+            // 🔹 이어 읽기 버튼
+            Button(action: { onContinue() }) {       // 🔥 이렇게 실행
                 Text("이어 읽기")
                     .font(.headline)
-                    .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+                    .padding(.vertical, 14)
                     .background(Color.blue)
                     .foregroundColor(.white)
                     .cornerRadius(22)
             }
+        
+            .sheet(isPresented: $showContinueSheet) {
+                if let verseId = continueVerseId {
+                    PersonalChallengeReadingView(
+                        mode: continueMode,
+                        preselectedBook: nil,
+                        initialVerseId: verseId
+                    )
+                } else {
+                    // 혹시 몰라서 fallback
+                    PersonalChallengeReadingView(mode: .personal)
+                }
+            }
+
+
         }
         .padding(24)
         .background(Color(UIColor.secondarySystemBackground)) // ✅ 카드 배경
         .cornerRadius(28)
         .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 8)
     }
+    
 }
 
 // 예전 ChallengeRow (지금은 NavigationLink 라벨로만 쓰므로 안 써도 됨)
