@@ -196,46 +196,46 @@ extension BibleAPI {
 
     /// 저장된 이어읽기 위치 조회 (없으면 nil)
     // 이어읽기 위치 조회
-        func fetchLastReadPosition() async throws -> LastReadPositionResponseDTO? {
-           let url = baseURL.appendingPathComponent("/api/reading/last-read")
-           var request = URLRequest(url: url)
-           request.httpMethod = "GET"
-           request.addValue("application/json", forHTTPHeaderField: "Accept")
+    // BibleAPI.swift
 
-           addAuthHeader(&request)   // 🔹 기존 JWT 붙이는 함수
+    func fetchLastReadPosition() async throws -> LastReadPositionResponseDTO? {
+        guard let url = URL(string: "\(baseURL)/api/reading/last-read") else { return nil }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        
+        // 토큰 헤더 추가
+        if let token = UserDefaults.standard.string(forKey: "accessToken") {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { return nil }
 
-           let (data, response) = try await URLSession.shared.data(for: request)
-
-           guard let http = response as? HTTPURLResponse else {
-               throw APIError.network
-           }
-
-           // 🔹 401: 토큰 만료 or 로그인 필요
-           if http.statusCode == 401 {
-               print("❌ fetchLastReadPosition: 401 Unauthorized (토큰 만료/로그인 필요)")
-               throw APIError.unauthorized
-           }
-
-           // 🔹 404: 아직 이어읽기 기록 없음 → nil 리턴
-           if http.statusCode == 404 {
-               print("ℹ️ fetchLastReadPosition: 404 (이어읽기 기록 없음)")
-               return nil
-           }
-
-           // 🔹 그밖의 에러
-           guard (200...299).contains(http.statusCode) else {
-               print("❌ fetchLastReadPosition 실패: httpStatus(code: \(http.statusCode))")
-               throw APIError.httpStatus(code: http.statusCode)
-           }
-
-           do {
-               return try JSONDecoder().decode(LastReadPositionResponseDTO.self, from: data)
-           } catch {
-               print("❌ fetchLastReadPosition 디코딩 실패: \(error)")
-               throw APIError.decoding
-           }
-       }
-
+        // 🚨 [핵심 수정] 401 (토큰 만료) 감지 시 강제 로그아웃 신호 발송
+        if httpResponse.statusCode == 401 {
+            print("❌ 토큰 만료됨 (401) -> 로그인 화면으로 이동합니다.")
+            
+            // 메인 스레드에서 알림 발송
+            await MainActor.run {
+                NotificationCenter.default.post(name: .forceLogout, object: nil)
+            }
+            
+            throw APIError.unauthorized
+        }
+        
+        // 404 처리 (기록 없음)
+        if httpResponse.statusCode == 404 {
+            return nil
+        }
+        
+        // 200 OK 처리
+        if (200...299).contains(httpResponse.statusCode) {
+            return try JSONDecoder().decode(LastReadPositionResponseDTO.self, from: data)
+        }
+        
+        return nil
+    }
     /// 이어읽기 위치 갱신
     func updateLastReadPosition(verseId: String,
                                 mode: String,

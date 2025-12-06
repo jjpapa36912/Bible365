@@ -16,3 +16,8 @@ struct Bible365App: App {
         }
     }
 }
+import Foundation
+
+extension Notification.Name {
+    static let forceLogout = Notification.Name("ForceLogout")
+}

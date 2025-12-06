@@ -49,6 +49,18 @@ struct RootView: View {
             .navigationDestination(isPresented: $showFindPassword) {
                 FindPasswordView()
             }
+            // 🚨 [핵심 수정] 강제 로그아웃 신호 감지
+                    .onReceive(NotificationCenter.default.publisher(for: .forceLogout)) { _ in
+                        print("🔄 강제 로그아웃 실행 (세션 만료)")
+                        
+                        // 1. 토큰 삭제
+                        UserDefaults.standard.removeObject(forKey: "accessToken")
+                        UserDefaults.standard.removeObject(forKey: "refreshToken")
+                        UserDefaults.standard.removeObject(forKey: "userId")
+                        
+                        // 2. 로그인 상태 해제 -> 로그인 화면으로 전환됨
+                        isLoggedIn = false
+                    }
         }
     }
 
