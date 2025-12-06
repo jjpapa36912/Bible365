@@ -237,43 +237,59 @@ extension BibleAPI {
         return nil
     }
     /// 이어읽기 위치 갱신
-    func updateLastReadPosition(verseId: String,
-                                mode: String,
-                                teamId: Int?,
-                                teamName: String?) async throws
- {
-           let url = baseURL.appendingPathComponent("/api/reading/last-read")
-           var request = URLRequest(url: url)
-           request.httpMethod = "POST"
-           request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-
-           addAuthHeader(&request)   // 🔹 JWT
-
-     let body = LastReadPositionRequestDTO(
-         verseId: verseId,
-         mode: mode,
-         teamId: teamId,
-         teamName: teamName
-     )
-        request.httpBody = try JSONEncoder().encode(body)
-
-           let (_, response) = try await URLSession.shared.data(for: request)
-
-           guard let http = response as? HTTPURLResponse else {
-               throw APIError.network
-           }
-
-           // 🔹 401: 토큰 만료 or 로그인 필요
-           if http.statusCode == 401 {
-               print("❌ updateLastReadPosition: 401 Unauthorized (토큰 만료/로그인 필요)")
-               throw APIError.unauthorized
-           }
-
-           guard (200...299).contains(http.statusCode) else {
-               print("❌ updateLastReadPosition 실패: httpStatus(code: \(http.statusCode))")
-               throw APIError.httpStatus(code: http.statusCode)
-           }
-       }
+    // ✅ 3. 마지막 읽은 위치 저장 (LastReadPosition)
+        func updateLastReadPosition(verseId: String, mode: String, teamId: Int?, teamName: String?) async throws {
+            
+            struct LastReadBody: Codable {
+                let verseId: String
+                let mode: String
+                let teamId: Int?
+            }
+            
+            let body = LastReadBody(verseId: verseId, mode: mode, teamId: teamId)
+            
+            // URL 생성
+            guard let url = URL(string: "\(baseURL)/api/reading/last-read") else { return }
+            
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            
+            // ====================================================
+            // ✅ [핵심 수정] 토큰이 있으면 헤더에 추가 (이게 없어서 401 뜸)
+            // ====================================================
+            if let token = UserDefaults.standard.string(forKey: "accessToken") {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            } else {
+                print("❌ [LastRead] 저장 실패: 로컬에 토큰이 없습니다. (로그인 필요)")
+                throw APIError.unauthorized
+            }
+            // ====================================================
+            
+            request.httpBody = try JSONEncoder().encode(body)
+            
+            let (_, response) = try await URLSession.shared.data(for: request)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                // 401(만료)이면 강제 로그아웃 신호 보내기 (이전에 만든 로직 활용)
+                if httpResponse.statusCode == 401 {
+                    print("❌ [LastRead] 401 Unauthorized: 토큰 만료됨 -> 강제 로그아웃 처리")
+                    
+                    await MainActor.run {
+                        NotificationCenter.default.post(name: .forceLogout, object: nil)
+                    }
+                    
+                    throw APIError.unauthorized
+                }
+                
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    print("❌ [LastRead] 서버 에러: Status \(httpResponse.statusCode)")
+                    throw URLError(.badServerResponse)
+                }
+                
+                print("✅ 위치 저장 성공: \(verseId)")
+            }
+        }
 }
 enum APIError: Error {
     case network

@@ -10,7 +10,10 @@ import SwiftUI
 
 struct MainScreenView: View {
     var onLogout: (() -> Void)? = nil   // RootView 에서 주는 콜백
-
+    @StateObject private var teamStore = TeamChallengeStore.shared
+    @State private var navTargetMode: BibleProgressMode?
+     @State private var navTargetVerseId: String?
+     @State private var navigateToReading: Bool = false
     // 🔹 이어읽기용 상태
     @State private var lastRead: BibleAPI.LastReadPositionResponseDTO?
     @State private var showContinueReading = false
@@ -140,23 +143,21 @@ struct MainScreenView: View {
             await rankingVM.load()
         }
         // 🔹 이어읽기 네비게이션
-        .navigationDestination(isPresented: $showContinueReading) {
-            if let info = lastRead {
-                if info.mode == "team", let teamId = info.teamId {
+        // MainScreenView의 body 내부, .task 등의 아래쪽
+
+            .navigationDestination(isPresented: $navigateToReading) {
+                if let mode = navTargetMode {
+                    // 개인/팀 모드 구분 없이 여기서 통합 처리
                     PersonalChallengeReadingView(
-                        mode: .team(teamId: teamId, name: info.teamName ?? "팀 챌린지"),
-                        initialVerseId: info.verseId
+                        mode: mode,
+                        preselectedBook: nil,
+                        initialVerseId: navTargetVerseId
                     )
                 } else {
-                    PersonalChallengeReadingView(
-                        mode: .personal,
-                        initialVerseId: info.verseId
-                    )
+                    // 안전장치
+                    PersonalChallengeReadingView(mode: .personal)
                 }
-            } else {
-                PersonalChallengeReadingView(mode: .personal)
             }
-        }
 
 
 
@@ -165,29 +166,51 @@ struct MainScreenView: View {
     // MARK: - 이어읽기 처리 로직
 
     private func handleContinueReading() {
-        Task {
-            do {
-                if let info = try await BibleAPI.shared.fetchLastReadPosition() {
-                    print("마지막 위치: \(info.verseId), mode=\(info.mode)")
-                    await MainActor.run {
-                        self.lastRead = info
-                        self.showContinueReading = true   // ✅ 화면 전환 트리거
+            _Concurrency.Task {
+                do {
+                    // 1. 서버에서 "가장 최근 기록" 가져오기
+                    if let info = try await BibleAPI.shared.fetchLastReadPosition() {
+                        
+                        var targetMode: BibleProgressMode = .personal
+                        
+                        // 2. 모드 판단
+                        if info.mode == "team", let tid = info.teamId {
+                            // 🚀 팀 모드 기록이라면: 내 팀 목록에서 이름 찾아서 팀 모드로 설정
+                            // (미리 로딩된 teamStore.myTeams 활용)
+                            if let foundTeam = teamStore.myTeams.first(where: { $0.id == tid }) {
+                                targetMode = .team(teamId: tid, name: foundTeam.name)
+                                print("➡️ 이어읽기: 팀(\(foundTeam.name))으로 이동")
+                            } else {
+                                // 팀 목록에 없으면(탈퇴했거나 로딩 전) 일단 ID로 진입 시도
+                                targetMode = .team(teamId: tid, name: "팀 챌린지")
+                            }
+                        } else {
+                            // 🚀 개인 모드 기록이라면
+                            targetMode = .personal
+                            print("➡️ 이어읽기: 개인 모드로 이동")
+                        }
+
+                        // 3. 네비게이션 트리거 (화면 이동)
+                        await MainActor.run {
+                            self.navTargetMode = targetMode
+                            self.navTargetVerseId = info.verseId
+                            self.navigateToReading = true
+                        }
+
+                    } else {
+                        // 4. 기록이 아예 없음 (신규 유저) -> 개인 모드 1:1로 이동
+                        print("ℹ️ 기록 없음 -> 개인 모드 시작")
+                        await MainActor.run {
+                            self.navTargetMode = .personal
+                            self.navTargetVerseId = nil // 처음부터
+                            self.navigateToReading = true
+                        }
                     }
-                } else {
-                    print("이어 읽기 기록 없음 → 처음부터 시작")
-                    await MainActor.run {
-                        self.lastRead = nil
-                        self.showContinueReading = true
-                    }
+                } catch {
+                    print("❌ 이어읽기 실패: \(error)")
                 }
-            } catch APIError.unauthorized {
-                print("❌ 이어읽기: 401 → 로그인 필요")
-                // TODO: 로그인 화면 이동 or 알림 처리
-            } catch {
-                print("❌ 이어읽기 오류: \(error)")
             }
         }
-    }
 
     // MARK: - 랭킹 섹션
 

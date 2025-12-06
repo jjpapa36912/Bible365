@@ -6,12 +6,12 @@
 //
 
 import Foundation
-struct LoginResponseDTO: Decodable {
-    let accessToken: String
-    let refreshToken: String
-    let userId: Int64
-    let nickname: String
-}
+//struct LoginResponseDTO: Decodable {
+//    let accessToken: String
+//    let refreshToken: String
+//    let userId: Int64
+//    let nickname: String
+//}
 
 struct LoginResponse: Codable {
     let accessToken: String

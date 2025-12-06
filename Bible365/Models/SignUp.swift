@@ -15,8 +15,13 @@ struct SignupRequestDTO: Encodable {
 }
 
 struct SignupResponseDTO: Decodable {
-    let success: Bool
-    let message: String
+    let id: Int?           // 또는 Long
+        let email: String?
+        let nickname: String?
+        
+        // 🚨 [필수 추가] 이 두 줄이 없어서 에러가 난 것입니다.
+        let accessToken: String?
+        let refreshToken: String?
 }
 
 struct ResetPasswordResponseDTO: Decodable {

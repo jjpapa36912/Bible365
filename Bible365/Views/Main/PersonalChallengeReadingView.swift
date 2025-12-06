@@ -144,63 +144,41 @@ struct BibleBookBlockView: View {
     let isCurrent: Bool
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // 유리판
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.10),
-                                Color.white.opacity(0.05)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
+           GeometryReader { geo in
+               ZStack {
+                   // 배경
+                   RoundedRectangle(cornerRadius: 12)
+                       .fill(Color.white.opacity(0.10))
 
-                // 진행률 빛 (왼쪽에서 채워지는 느낌)
-                if progress.progress > 0 {
-                    // 🔹 실제 진행률이 아주 작아도 최소 2% 정도는 보이게 보정
-                    let raw = progress.progress
-                    let boosted = max(raw, 0.02)   // 1절만 읽어도 살짝은 보이도록
-                    let p = CGFloat(min(boosted, 1.0))
+                   // 🚀 [수정] 0.0001이라도 있으면 최소 15% 길이 보장
+                   if progress.progress > 0 {
+                       // 실제 비율(raw)과 0.15 중 큰 값 선택
+                       let visualProgress = max(progress.progress, 0.15)
+                       // 100%를 넘지 않도록 min 처리
+                       let width = geo.size.width * CGFloat(min(visualProgress, 1.0))
 
-                    // 0~1  →  0.15~0.70 로 스케일 (너무 많이 안 채워지게)
-                    let ratio = 0.15 + 0.55 * p
+                       RoundedRectangle(cornerRadius: 12)
+                           .fill(
+                               LinearGradient(
+                                   colors: [Color.yellow.opacity(0.8), Color.white.opacity(0.0)],
+                                   startPoint: .leading, endPoint: .trailing
+                               )
+                           )
+                           .frame(width: width, height: geo.size.height) // 🔹 계산된 너비 적용
+                           .shadow(color: Color.yellow.opacity(0.5), radius: 8)
+                           .mask(RoundedRectangle(cornerRadius: 12))
+                           .frame(maxWidth: .infinity, alignment: .leading)
+                   }
 
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.yellow.opacity(0.7),
-                                    Color.white.opacity(0.0)
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: geo.size.width * ratio,
-                               height: geo.size.height)
-                        .shadow(color: Color.yellow.opacity(0.4),
-                                radius: 10, x: 0, y: 0)
-                        .mask(
-                            RoundedRectangle(cornerRadius: 12)
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                // 책 이름
-                Text(progress.book.nameKo)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white)
-                    .minimumScaleFactor(0.6)
-                    .lineLimit(1)
-                    .padding(.horizontal, 8)
-            }
-        }
-        .frame(height: 28)
-    }
+                   // 텍스트
+                   Text(progress.book.nameKo)
+                       .font(.system(size: 11, weight: .semibold))
+                       .foregroundColor(.white)
+                       .padding(.horizontal, 8)
+               }
+           }
+           .frame(height: 28)
+       }
 }
 
 // MARK: - 전체 BIBLE 보드 (이미지 없이 순수 SwiftUI)

@@ -1,5 +1,11 @@
 import Foundation
-
+// 서버 응답 형태에 맞춘 구조체
+struct LoginResponseDTO: Decodable {
+    let accessToken: String
+    let refreshToken: String
+    let userId: Int        // 서버가 Long이면 Swift에서는 Int 또는 Int64
+    let nickname: String?  // 닉네임도 온다면 추가
+}
 class AuthAPI {
     static let shared = AuthAPI()
     private init() {}
@@ -98,7 +104,14 @@ class AuthAPI {
             }
 
             let res = try JSONDecoder().decode(LoginResponse.self, from: data)
-
+        //  // 3. 🚨 [핵심 수정] Data를 구조체로 변환 (Decode)
+        // 여기서 'response' 변수가 아니라, 위에서 정의한 'LoginResponseDTO'로 변환해야 합니다.
+        let decodedResponse = try JSONDecoder().decode(LoginResponseDTO.self, from: data)
+        
+        // 4. ✅ 변환된 객체에서 토큰 꺼내서 저장
+        UserDefaults.standard.set(decodedResponse.accessToken, forKey: "accessToken")
+        UserDefaults.standard.set(decodedResponse.refreshToken, forKey: "refreshToken")
+        UserDefaults.standard.set(String(decodedResponse.userId), forKey: "userId")
             // ✅ 토큰/유저 정보 저장 (다른 코드에 영향 없이 기존 키만 사용)
             KeychainManager.save(key: "accessToken", value: res.accessToken)
             KeychainManager.save(key: "refreshToken", value: res.refreshToken)
@@ -152,13 +165,14 @@ class AuthAPI {
 
         do {
             let res = try JSONDecoder().decode(SignupResponseDTO.self, from: data)
-            if !res.success {
-                throw NSError(
-                    domain: "SignupError",
-                    code: 0,
-                    userInfo: [NSLocalizedDescriptionKey: res.message]
-                )
+            // 🚨 [필수 추가] 회원가입 응답에도 토큰이 있다면 저장해야 함
+                // (만약 서버가 회원가입 시엔 토큰을 안 준다면, 회원가입 후 login()을 호출해야 함)
+            if let token = res.accessToken {
+                UserDefaults.standard.set(token, forKey: "accessToken")
+                print("✅ 회원가입 성공 & 토큰 저장 완료")
             }
+
+            
         } catch {
             log("❌ Signup decode error: \(error.localizedDescription)")
             throw error

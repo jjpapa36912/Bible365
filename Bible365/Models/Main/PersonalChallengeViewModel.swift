@@ -496,7 +496,32 @@ final class PersonalChallengeViewModel: ObservableObject {
     }
 
     // MARK: - verseId → bookCode
+    private func saveLastReadPosition() {
+           guard !currentVerse.id.isEmpty else { return }
+           
+           let vId = currentVerse.id
+           // 🔹 헬퍼 함수를 통해 현재 모드에 맞는 (modeString, teamId)를 가져옴
+           let (modeStr, teamId) = getModeParams()
 
+           Task {
+               try? await BibleAPI.shared.updateLastReadPosition(
+                   verseId: vId,
+                   mode: modeStr,
+                   teamId: teamId, // 🚀 여기가 핵심: 팀이면 ID가 가고, 개인이면 nil이 감
+                   teamName: nil
+               )
+           }
+       }
+
+       // 헬퍼 함수
+       private func getModeParams() -> (String, Int?) {
+           switch self.mode {
+           case .personal:
+               return ("personal", nil) // 🚀 개인은 무조건 nil
+           case .team(let id, _):
+               return ("team", id)      // 🚀 팀은 무조건 해당 ID
+           }
+       }
     private func bookCode(from verseId: String) -> String {
         verseId.split(separator: "-").first.map(String.init) ?? ""
     }
