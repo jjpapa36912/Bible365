@@ -583,10 +583,36 @@ struct PersonalChallengeReadingView: View {
         .onChange(of: vm.currentVerse.id) { _ in
             // 🔹 절 이동(이전/다음, 책 변경)할 때마다 저장
             sendLastReadPosition()
+            // 2. 🔹 [수정된 부분] 마이크가 켜져 있다면 STT 세션 재시작 호출
+            if vm.isListening {
+                restartSTTSessionIfNeeded()
+            }
         }
     }
 
+    // PersonalChallengeReadingView 내부
 
+    // MARK: - STT 재시작 헬퍼
+    private func restartSTTSessionIfNeeded() {
+        guard vm.isListening else { return }
+        
+        print("🔄 절 변경 -> STT 세션 재시작")
+
+        // 1) 기존 STT 세션 정리 (SpeechRecognizer 내부 stop 호출)
+        speech.stop()
+
+        // 2) 아주 짧은 딜레이 후 재시작 (AudioEngine 충돌 방지)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // 딜레이 동안 사용자가 멈췄을 수도 있으므로 재확인
+            guard vm.isListening else { return }
+            
+            speech.start { text in
+                Task { @MainActor in
+                    vm.handleRecognizedText(text)
+                }
+            }
+        }
+    }
     // MARK: - 헤더
     private func sendLastReadPosition() {
         let verseId = vm.currentVerse.id

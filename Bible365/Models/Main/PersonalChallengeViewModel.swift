@@ -826,130 +826,196 @@ final class PersonalChallengeViewModel: ObservableObject {
         }
         return dp[n][m]
     }
-
-    
-    private func isLooseKoreanMatch(normalizedVerseWord nw: String,
-                                    normalizedToken t: String) -> Bool {
-        // 공백 제거(혹시 모를 스페이스)
-        let nwTrim = nw.replacingOccurrences(of: " ", with: "")
-        let tTrim  = t.replacingOccurrences(of: " ", with: "")
-
-        // 0) 완전 일치
-        if nwTrim == tTrim { return true }
-
-        // 한글이 전혀 없으면 느슨 매칭 안 함
-        guard containsHangul(nwTrim) || containsHangul(tTrim) else {
-            return false
-        }
-
-        // 0-1) "도륙하고"(nw) vs "도륙"(t),
-        //      "창조하시니라"(nw) vs "창조"(t) 같은
-        //      [성경 단어] = [어간] + 조사/어미 케이스
-        let safeSuffixes: Set<String> = [
-            "하고", "하며", "하여", "하면서",
-            "하니라", "하도다",
-            "하시니라", "하셨느니라",
-            "이라고", "라고",
-            "이라", "이니라", "이며", "이고"
-        ]
-
-        if nwTrim.count > tTrim.count {
-            let diff = nwTrim.count - tTrim.count
-            // 조사/어미 길이는 최대 4글자까지 허용 (하시니라 4글자 대응)
-            if diff > 0 && diff <= 4, nwTrim.hasPrefix(tTrim) {
-                let suffix = String(nwTrim.dropFirst(tTrim.count))
-                if safeSuffixes.contains(suffix) {
-                    return true
-                }
+    // MARK: - 기호 자동 처리
+    private func autoHighlightPunctuation() {
+        for (index, word) in words.enumerated() {
+            // 이미 파란색이면 패스
+            if highlightedWordIndexes.contains(index) { continue }
+            
+            // 정규화(normalize)를 거쳤을 때 빈 문자열이 된다면?
+            // -> 한글/영어/숫자가 하나도 없는 순수 기호(?, !, " 등)라는 뜻입니다.
+            if normalize(word).isEmpty {
+                highlightedWordIndexes.insert(index)
             }
-        }
-
-        // 필요하면 반대 케이스(STT가 더 길 때)도 열어둘 수 있지만
-        // 오탐 위험이 커서 일단 막아둠
-        // if tTrim.count > nwTrim.count { ... }
-
-        // 1) 1글자 토큰: 기존 로직 유지
-        if tTrim.count == 1 {
-            guard let ch = tTrim.first else { return false }
-
-            let naene: Set<Character> = ["내", "네"]
-            func inNaene(_ c: Character) -> Bool { naene.contains(c) }
-
-            if nwTrim.count <= 3, let first = nwTrim.first, let last = nwTrim.last {
-
-                if first == ch || last == ch {
-                    return true
-                }
-
-                if inNaene(ch) && (inNaene(first) || inNaene(last)) {
-                    return true
-                }
-
-                return false
-            } else {
-                return false
-            }
-        }
-
-        // 2) 2글자 이상: 기존 Levenshtein 느슨 매칭
-        if nwTrim.count < 2 || tTrim.count < 2 { return false }
-        guard let f1 = nwTrim.first, let f2 = tTrim.first, f1 == f2 else {
-            return false
-        }
-
-        let a = Array(nwTrim)
-        let b = Array(tTrim)
-        let maxLen = max(a.count, b.count)
-
-        // 길이 차이가 너무 크면(>2) 그대로 다른 단어로 본다.
-        // → "도륙하고"(4) vs "도륙"(2) 는 위 suffix 로직에서 이미 처리됨
-        if abs(a.count - b.count) > 2 { return false }
-
-        let dist = levenshtein(a, b)
-        if maxLen <= 4 {
-            return dist <= 1
-        } else {
-            return dist <= 2
         }
     }
+    
+    // MARK: - 매칭 판별 로직 (자모 기반)
+    private func isLooseKoreanMatch(normalizedVerseWord nw: String,
+                                    normalizedToken t: String) -> Bool {
+        
+        // 1. 공백 제거 후 단순 일치 확인 (가장 빠름)
+        let nwTrim = nw.replacingOccurrences(of: " ", with: "")
+        let tTrim  = t.replacingOccurrences(of: " ", with: "")
+        
+        if nwTrim == tTrim { return true }
+        
+        // 2. 포함 관계 확인 (ex: "할렐루야" vs "할렐루야!" 처럼 기호가 붙은 경우 대비)
+        if nwTrim.contains(tTrim) || tTrim.contains(nwTrim) { return true }
+        
+        // 3. 자모 분해 후 비교 (핵심: "진에서" vs "지내서" 해결)
+        // decomposeAndNormalize 함수가 'ㅇ' 제거 및 모음 통일을 수행함
+        let jamoVerse = decomposeAndNormalize(nwTrim)
+        let jamoToken = decomposeAndNormalize(tTrim)
+        
+        // 자모가 완전히 같으면 OK
+        if jamoVerse == jamoToken { return true }
+        
+        // 4. 자모 단위 편집 거리 (Levenshtein) 계산
+        // 예: "가라사대" vs "가라시대" (모음 하나 차이) 등을 허용
+        let dist = levenshteinJamo(Array(jamoVerse), Array(jamoToken))
+        
+        // 허용 오차 설정
+        // 길이가 길면(5자 이상) 2개까지 틀려도 됨, 짧으면 1개까지만
+        let limit = jamoVerse.count >= 5 ? 2 : 1
+        
+        if dist <= limit {
+            return true
+        }
+        
+        return false
+    }
+    // MARK: - 헬퍼: 자모 분해 및 정규화
+    private func decomposeAndNormalize(_ text: String) -> String {
+        let cho = ["ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"]
+        let jung = ["ㅏ","ㅐ","ㅑ","ㅒ","ㅓ","ㅔ","ㅕ","ㅖ","ㅗ","ㅘ","ㅙ","ㅚ","ㅛ","ㅜ","ㅝ","ㅞ","ㅟ","ㅠ","ㅡ","ㅢ","ㅣ"]
+        let jong = ["","ㄱ","ㄲ","ㄳ","ㄴ","ㄵ","ㄶ","ㄷ","ㄹ","ㄺ","ㄻ","ㄼ","ㄽ","ㄾ","ㄿ","ㅀ","ㅁ","ㅂ","ㅄ","ㅅ","ㅆ","ㅇ","ㅈ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"]
+        
+        var result = ""
+        
+        for scalar in text.unicodeScalars {
+            let code = scalar.value
+            if code >= 0xAC00 && code <= 0xD7A3 { // 한글 범위
+                let index = Int(code - 0xAC00)
+                let choIdx = index / 28 / 21
+                let jungIdx = (index / 28) % 21
+                let jongIdx = index % 28
+                
+                // 1. 초성: 'ㅇ'은 소리가 없으므로 제거 (연음 법칙 해결의 핵심)
+                if choIdx != 11 { result += cho[choIdx] }
+                
+                // 2. 중성: 발음이 비슷한 모음 통일
+                var v = jung[jungIdx]
+                if ["ㅙ", "ㅞ"].contains(v) { v = "ㅚ" } // 돼 -> 되
+                else if ["ㅐ"].contains(v) { v = "ㅔ" }  // 애 -> 에
+                else if ["ㅒ"].contains(v) { v = "ㅖ" }  // 얘 -> 예
+                result += v
+                
+                // 3. 종성
+                if jongIdx > 0 { result += jong[jongIdx] }
+            } else {
+                result += String(scalar)
+            }
+        }
+        return result
+    }
+
+    // MARK: - 헬퍼: 자모 레벤슈타인 거리
+    private func levenshteinJamo(_ a: [Character], _ b: [Character]) -> Int {
+        let n = a.count
+        let m = b.count
+        if n == 0 { return m }
+        if m == 0 { return n }
+
+        var dp = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+        for i in 0...n { dp[i][0] = i }
+        for j in 0...m { dp[0][j] = j }
+
+        for i in 1...n {
+            for j in 1...m {
+                if a[i - 1] == b[j - 1] {
+                    dp[i][j] = dp[i - 1][j - 1]
+                } else {
+                    dp[i][j] = min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]) + 1
+                }
+            }
+        }
+        return dp[n][m]
+    }
+    // PersonalChallengeViewModel 클래스 내부
 
     func matchTokensToVerseWords(verseWords: [String], tokens: [String]) -> Set<Int> {
         var matchedIndexes: Set<Int> = []
-        var tokenIndex = 0
+        
+        // STT 토큰 내에서 검색을 시작할 위치 (커서)
+        var searchStartIndex = 0
+        
+        // 성경 본문 단어를 처음부터 끝까지 순회
+        for (vIndex, verseWord) in verseWords.enumerated() {
+            
+            let normVerse = normalize(verseWord)
+            if normVerse.isEmpty { continue }
 
-        for (i, verseWord) in verseWords.enumerated() {
-            guard tokenIndex < tokens.count else { break }
-
-            let t1 = tokens[tokenIndex]
-            let single = t1
-            let combined: String? = {
-                guard tokenIndex + 1 < tokens.count else { return nil }
-                return t1 + tokens[tokenIndex + 1]     // "창조" + "하시니라" = "창조하시니라"
-            }()
-
-            // 1) 현재 토큰 하나만으로 매칭 시도
-            if isLooseKoreanMatch(normalizedVerseWord: verseWord, normalizedToken: single) {
-                matchedIndexes.insert(i)
-                tokenIndex += 1
-                continue
+            // 🔍 검색 범위 설정: 현재 커서부터 "앞으로 15개 토큰"까지 스캔
+            // (중간에 '햇수로을' 같은 이상한 단어가 섞여 있어도 15개 안에는 맞는 단어가 나오겠지? 라는 전략)
+            let searchRangeEnd = min(searchStartIndex + 15, tokens.count)
+            
+            // 찾았는지 여부
+            var foundMatch = false
+            
+            // 검색 범위(Window) 안에서 훑어보기
+            for tIndex in searchStartIndex..<searchRangeEnd {
+                let token = tokens[tIndex]
+                let normToken = normalize(token)
+                
+                // 1) 단일 토큰 매칭
+                if isLooseKoreanMatch(normalizedVerseWord: normVerse, normalizedToken: normToken) {
+                    matchedIndexes.insert(vIndex)
+                    // 찾았으면, 다음 단어는 이 단어 바로 뒤부터 찾기 시작 (커서 이동)
+                    searchStartIndex = tIndex + 1
+                    foundMatch = true
+                    break
+                }
+                
+                // 2) 이어지는 두 토큰 합쳐서 매칭 (띄어쓰기 오차 보정)
+                if tIndex + 1 < tokens.count {
+                    let combined = normToken + normalize(tokens[tIndex+1])
+                    if isLooseKoreanMatch(normalizedVerseWord: normVerse, normalizedToken: combined) {
+                        matchedIndexes.insert(vIndex)
+                        // 두 단어만큼 건너뛰기
+                        searchStartIndex = tIndex + 2
+                        foundMatch = true
+                        break
+                    }
+                }
             }
-
-            // 2) 현재 + 다음 토큰을 합쳐서 매칭 시도
-            if let comb = combined,
-               isLooseKoreanMatch(normalizedVerseWord: verseWord, normalizedToken: comb) {
-                matchedIndexes.insert(i)
-                tokenIndex += 2   // 두 토큰 소비
-                continue
-            }
-
-            // 3) 둘 다 안 맞으면 STT 토큰 하나만 넘기고 다음 비교
-            tokenIndex += 1
+            
+            // 💡 중요: 만약 이번 verseWord를 못 찾았다면?
+            // searchStartIndex(커서)를 움직이지 않고 그냥 다음 verseWord로 넘어갑니다.
+            // 즉, "베레스"를 못 찾았어도 커서는 그대로 두고, 다음 "세라를"이 있는지 찾아봅니다.
         }
 
         return matchedIndexes
     }
 
+    // PersonalChallengeViewModel 클래스 내부
 
+    private func sanitizeSTTInput(_ text: String) -> String {
+        var fixed = text
+        
+        // 성경 낭독 시 자주 발생하는 STT 오류 사전
+        let replacements: [String: String] = [
+            // 기존
+            "롯데": "묻되", "못돼": "묻되", "묻 돼": "묻되", "묻대": "묻되", "뭇대": "묻되",
+            "진에서묻": "진에서 묻", "진 에서묻": "진에서 묻",
+            "초크피": "촉급히", "초급히": "촉급히", "촉 급히": "촉급히", "초 급히": "촉급히",
+            
+            // 🔹 [추가된 부분] 사용자 제보 오인식 단어들
+            "다마에게서": "다말에게서",  // 다말 -> 다마
+            "다마 ": "다말 ",
+            "페레스": "베레스",        // 베레스 -> 페레스
+            "햇수로": "헤스론",        // 헤스론 -> 햇수로
+            "햇수로을": "헤스론을",
+            "유다는": "유다는",        // (참고용)
+            "세라를": "세라를"
+        ]
+        
+        for (wrong, right) in replacements {
+            fixed = fixed.replacingOccurrences(of: wrong, with: right)
+        }
+        
+        return fixed
+    }
 
     private func applyTokens(_ tokens: [String]) {
         let normalizedTokens = tokens
