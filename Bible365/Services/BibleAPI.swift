@@ -424,3 +424,69 @@ extension BibleAPI {
     }
 }
 
+extension BibleAPI {
+    
+    // 서버로 보낼 DTO
+    struct HighlightRequestDTO: Codable {
+        let verseId: String
+        let mode: String
+        let teamId: Int?
+        let indexes: [Int] // 파란색 칠해진 단어 순서들
+    }
+    
+    struct HighlightResponseDTO: Decodable {
+        let indexes: [Int]
+    }
+    
+    // ✅ 1. 하이라이트 정보 저장 (절 이동 시 호출)
+    func saveHighlights(verseId: String, mode: String, teamId: Int?, indexes: [Int]) async throws {
+        guard let url = URL(string: "\(baseURLString)/api/progress/save") else { return }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // 토큰 추가
+        if let token = UserDefaults.standard.string(forKey: "accessToken") {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let body = HighlightRequestDTO(verseId: verseId, mode: mode, teamId: teamId, indexes: indexes)
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (_, response) = try await URLSession.shared.data(for: request)
+        
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 {
+            // 토큰 만료 처리 등
+            throw APIError.unauthorized
+        }
+    }
+    
+    // ✅ 2. 하이라이트 정보 불러오기 (절 진입 시 호출)
+    func fetchHighlights(verseId: String, mode: String, teamId: Int?) async throws -> [Int] {
+        var urlString = "\(baseURLString)/api/progress/\(verseId)?mode=\(mode)"
+        if let tid = teamId {
+            urlString += "&teamId=\(tid)"
+        }
+        
+        guard let url = URL(string: urlString) else { return [] }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        
+        if let token = UserDefaults.standard.string(forKey: "accessToken") {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        if let http = response as? HTTPURLResponse {
+            if http.statusCode == 401 { throw APIError.unauthorized }
+            if http.statusCode != 200 { return [] } // 데이터 없으면 빈 배열
+        }
+        
+        // Response: { "indexes": [0, 1, 5] }
+        let decoded = try JSONDecoder().decode(HighlightResponseDTO.self, from: data)
+        return decoded.indexes
+    }
+}

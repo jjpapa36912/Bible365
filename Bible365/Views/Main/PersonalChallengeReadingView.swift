@@ -393,6 +393,10 @@ struct PersonalChallengeReadingView: View {
                 }
             }
         }
+        .onDisappear {
+                    // 🚀 화면 나갈 때 저장
+                    vm.saveHighlightsToServer()
+                }
         .onChange(of: vm.didFinishWholeBibleRound) { newValue in
             if newValue {
                 showFinishAlert = true

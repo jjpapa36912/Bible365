@@ -514,18 +514,85 @@ final class PersonalChallengeViewModel: ObservableObject {
        }
 
        // 헬퍼 함수
-       private func getModeParams() -> (String, Int?) {
-           switch self.mode {
-           case .personal:
-               return ("personal", nil) // 🚀 개인은 무조건 nil
-           case .team(let id, _):
-               return ("team", id)      // 🚀 팀은 무조건 해당 ID
-           }
-       }
+    private func getModeParams() -> (String, Int?) {
+            switch self.mode {
+            case .personal:
+                return ("personal", nil)
+            case .team(let id, _):
+                return ("team", id)
+            }
+        }
     private func bookCode(from verseId: String) -> String {
         verseId.split(separator: "-").first.map(String.init) ?? ""
     }
+    // PersonalChallengeViewModel.swift 내부
+    func saveHighlightsToServer() {
+           // 현재 화면에 떠있는 절과 하이라이트 정보를 그대로 저장
+           saveHighlightsSnapshot(verseId: currentVerse.id, indexes: highlightedWordIndexes)
+       }
+    // ✅ [수정] 현재 상태(currentVerse)에 의존하지 않고, 전달받은 값으로 저장하도록 변경
+    func saveHighlightsSnapshot(verseId: String, indexes: Set<Int>) {
+        let (modeStr, teamId) = getModeParams()
+        let indexArray = Array(indexes).sorted()
+        
+        // 비동기로 서버에 전송 (결과 기다리지 않음)
+        Task {
+            try? await BibleAPI.shared.saveHighlights(
+                verseId: verseId,
+                mode: modeStr,
+                teamId: teamId,
+                indexes: indexArray
+            )
+            print("💾 [저장 완료] \(verseId) (단어 \(indexArray.count)개)")
+        }
+    }
+    // PersonalChallengeViewModel.swift 내부
 
+    func loadHighlightsFromServer() async {
+        let (modeStr, teamId) = getModeParams()
+        
+        // 현재 로딩하려는 verseId를 캡처 (비동기 처리 중 절이 또 바뀌었을 경우 대비)
+        let targetVerseId = currentVerse.id
+        
+        do {
+            let savedIndexes = try await BibleAPI.shared.fetchHighlights(
+                verseId: targetVerseId,
+                mode: modeStr,
+                teamId: teamId
+            )
+            
+            await MainActor.run {
+                // 만약 그 사이에 사용자가 또 다른 절로 이동해버렸다면 무시
+                guard currentVerse.id == targetVerseId else { return }
+                
+                // 1) 화면에 적용
+                self.highlightedWordIndexes = Set(savedIndexes)
+                
+                // 2) 진행도 스토어(블럭) 업데이트
+                let code = bookCode(from: targetVerseId)
+                let isCompleted = isCurrentVerseCompleted()
+                
+                progressStore.updateVerseProgress(
+                    mode: mode,
+                    verseId: targetVerseId,
+                    bookCode: code,
+                    highlightedIndexes: highlightedWordIndexes,
+                    isCompleted: isCompleted
+                )
+                
+                // 3) 전체 퍼센트 재계산
+                recalcBookAndGlobalProgress()
+            }
+        } catch {
+            print("⚠️ 하이라이트 로드 실패 (데이터 없음 등): \(error)")
+            // 실패 시(또는 데이터 없음) 빈 상태 유지
+            await MainActor.run {
+                if currentVerse.id == targetVerseId {
+                    self.highlightedWordIndexes = []
+                }
+            }
+        }
+    }
     // MARK: - 절 완료 처리
 
     func handleVerseCompleted(_ verse: BibleVerse) {
@@ -688,42 +755,56 @@ final class PersonalChallengeViewModel: ObservableObject {
     
     // MARK: - 책/장/절 변경
 
-    func updateVerse(bookCode: String?, chapter: Int, verse: Int) {
-        if let code = bookCode {
-            selectedBookCode = code
+    // PersonalChallengeViewModel.swift 내부
 
-            if let book = books.first(where: { $0.code == code }) {
+    func updateVerse(bookCode: String?, chapter: Int, verse: Int) {
+            // 1️⃣ [저장] 이동하기 "직전"의 현재 절과 하이라이트 정보를 스냅샷 떠서 저장 요청
+            saveHighlightsSnapshot(verseId: currentVerse.id, indexes: highlightedWordIndexes)
+
+            // 2️⃣ [초기화] 다음 절로 넘어가기 전에 화면의 파란색들을 싹 지움 (깜빡임 방지)
+            highlightedWordIndexes.removeAll()
+            
+            // 3️⃣ [이동] 이제 currentVerse를 새로운 절로 변경
+            if let code = bookCode {
+                // 책/장/절 모두 변경되는 경우 (예: 책 선택 변경)
+                selectedBookCode = code
+                
+                // 책 이름 찾기
+                let bookName: String
+                if let book = books.first(where: { $0.code == code }) {
+                    bookName = localizedBookName(for: book.code, fallback: book.name)
+                } else {
+                    bookName = localizedBookName(for: code, fallback: code)
+                }
+                
                 self.currentVerse = BibleVerse(
                     id: "\(code)-\(chapter)-\(verse)",
-                    book: localizedBookName(for: book.code, fallback: book.name),
+                    book: bookName,
                     chapter: chapter,
                     verse: verse,
-                    text: ""
+                    text: "" // 텍스트는 아직 비어있음 (로딩 전)
                 )
             } else {
+                // 같은 책 내에서 장/절만 변경 (예: 다음 절 버튼)
+                let currentBookName = currentVerse.book
+                
+                // 🚨 [수정] self.bookCode(...) 로 명시해서 매개변수와 구분
+                let currentCode = self.selectedBookCode ?? self.bookCode(from: currentVerse.id)
+                
                 self.currentVerse = BibleVerse(
-                    id: "\(code)-\(chapter)-\(verse)",
-                    book: localizedBookName(for: code, fallback: code),
+                    id: "\(currentCode)-\(chapter)-\(verse)",
+                    book: currentBookName,
                     chapter: chapter,
                     verse: verse,
-                    text: ""
+                    text: "" // 일단 빈 텍스트로 시작해서 UI 갱신 유도
                 )
             }
-        } else {
-            self.currentVerse = BibleVerse(
-                id: "\(selectedBookCode ?? "")-\(chapter)-\(verse)",
-                book: currentVerse.book,
-                chapter: chapter,
-                verse: verse,
-                text: currentVerse.text
-            )
-        }
 
-        Task {
-            try? await loadCurrentVerseFromServer()
+            // 4️⃣ [로드] 새로운 절의 본문과 저장된 하이라이트 정보를 서버에서 가져옴
+            Task {
+                try? await loadCurrentVerseFromServer()
+            }
         }
-    }
-
     func goToNextVerse() {
         var nextChapter = currentVerse.chapter
         var nextVerse = currentVerse.verse + 1
@@ -1111,32 +1192,40 @@ final class PersonalChallengeViewModel: ObservableObject {
         }
     }
 
+    // PersonalChallengeViewModel.swift 내부
+
     func loadCurrentVerseFromServer() async throws {
-        guard let bookCode = selectedBookCode, !bookCode.isEmpty else { return }
+        // bookCode가 없으면 현재 ID에서 추출
+        let code = selectedBookCode ?? bookCode(from: currentVerse.id)
+        guard !code.isEmpty else { return }
 
         do {
+            // 1) 텍스트 가져오기
             let dto = try await BibleAPI.shared.fetchVerse(
-                bookCode: bookCode,
+                bookCode: code,
                 chapter: currentVerse.chapter,
                 verse: currentVerse.verse
             )
 
-            self.currentVerse = BibleVerse(
-                id: "\(dto.bookCode)-\(dto.chapter)-\(dto.verse)",
-                book: localizedBookName(for: dto.bookCode, fallback: dto.bookCode),
-                chapter: dto.chapter,
-                verse: dto.verse,
-                text: dto.text
-            )
+            // UI 업데이트 (MainActor)
+            await MainActor.run {
+                self.currentVerse = BibleVerse(
+                    id: "\(dto.bookCode)-\(dto.chapter)-\(dto.verse)",
+                    book: localizedBookName(for: dto.bookCode, fallback: dto.bookCode),
+                    chapter: dto.chapter,
+                    verse: dto.verse,
+                    text: dto.text
+                )
+            }
 
-            loadHighlightForCurrentVerse()
-            recalcBookAndGlobalProgress()
+            // 2) 이 절의 저장된 하이라이트(파란색) 가져오기
+            await loadHighlightsFromServer()
+
         } catch {
             print("❌ loadCurrentVerseFromServer error: \(error)")
             throw error
         }
     }
-
     private func applyCategoryFilter() {
         guard !books.isEmpty else {
             filteredBooks = []
