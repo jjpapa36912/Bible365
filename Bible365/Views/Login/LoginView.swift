@@ -33,9 +33,8 @@ struct LoginView: View {
                 .background(Color.white.opacity(0.2))
                 .cornerRadius(10)
 
-            Button("Log In") {
+            Button(action: {
                 Task {
-                    // 🔹 간단한 입력 체크
                     guard !userId.isEmpty, !password.isEmpty else {
                         alertTitle = "알림"
                         alertMessage = "ID와 비밀번호를 모두 입력해주세요."
@@ -44,16 +43,10 @@ struct LoginView: View {
                     }
 
                     do {
-                        // 🔹 실제 로그인 API 호출
                         let response: LoginResponse = try await AuthAPI.shared.login(id: userId, password: password)
                         AuthManager.shared.applyLogin(response: response)
                         onLoginSuccess?()
-                        print("🔑 ACCESS TOKEN =", AuthAPI.shared.currentAccessToken ?? "nil")
-
-                        // 🔹 로그인 성공 시 콜백
-                        onLoginSuccess?()
                     } catch {
-                        print("Login failed:", error.localizedDescription)
                         alertTitle = "로그인 실패"
                         alertMessage = error.localizedDescription.isEmpty
                             ? "ID 또는 비밀번호가 올바르지 않습니다."
@@ -61,7 +54,16 @@ struct LoginView: View {
                         showAlert = true
                     }
                 }
+            }) {
+                Text("Log In")
+                    .frame(maxWidth: .infinity)   // ← 가로는 꽉 채움
+                    .padding(.vertical, 12)       // ← 자연스러운 버튼 높이
+                    .background(Color.white)
+                    .foregroundColor(.blue)
+                    .cornerRadius(12)
             }
+
+
             .padding()
             .frame(maxWidth: .infinity)
             .background(Color.white)
